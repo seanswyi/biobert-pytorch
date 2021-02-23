@@ -15,12 +15,11 @@
 # limitations under the License.
 """ Fine-tuning the library models for named entity recognition on CoNLL-2003. """
 
-
+import copy
 import logging
 import os
 import sys
-import pdb
-import subprocess
+import time
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -42,25 +41,31 @@ from transformers import (
 )
 from utils_ner import NerDataset, Split, get_labels
 
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ModelArguments:
-    """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
-    """
+    """Arguments pertaining to which model/config/tokenizer we are going to fine-tune from."""
+    model_type: str = field(
+        metadata={'help': "Type of BlueBERT model to use."}
+    )
 
     model_name_or_path: str = field(
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
+
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
     )
+
     tokenizer_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
     )
+
     use_fast: bool = field(default=False, metadata={"help": "Set this flag to use fast tokenization."})
+
     # If you want to tweak more attributes on your tokenizer, you should do it in a distinct script,
     # or just modify its tokenizer_config.json.
     cache_dir: Optional[str] = field(
@@ -70,17 +75,20 @@ class ModelArguments:
 
 @dataclass
 class DataTrainingArguments:
-    """
-    Arguments pertaining to what data we are going to input our model for training and eval.
-    """
+    """Arguments pertaining to what data we are going to input our model for training and eval."""
+    log_dir: str = field(
+        metadata={'help': "Directory to keep log files."}
+    )
 
     data_dir: str = field(
         metadata={"help": "The input data dir. Should contain the .txt files for a CoNLL-2003-formatted task."}
     )
+
     labels: Optional[str] = field(
         default=None,
         metadata={"help": "Path to a file containing all labels. If not specified, CoNLL-2003 labels are used."},
     )
+
     max_seq_length: int = field(
         default=128,
         metadata={
@@ -88,6 +96,7 @@ class DataTrainingArguments:
             "than this will be truncated, sequences shorter will be padded."
         },
     )
+
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
@@ -106,6 +115,8 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    model_type = model_args.model_type
+
     if (
         os.path.exists(training_args.output_dir)
         and os.listdir(training_args.output_dir)
@@ -116,9 +127,18 @@ def main():
             f"Output directory ({training_args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
         )
 
+    # if model_args.model_name_or_path == 'bert-base-uncased':
+    #     model_name = 'bert-base-uncased'
+    # else:
+    #     model_name = '_'.join(model_args.model_name_or_path.split('/')[1].split('_')[:3])
+
+    # log_filename = '-'.join([data_args.task_name, model_name]) + '.log'
+    # log_filepath = os.path.join('./results', log_filename)
+
     # Setup logging
     logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        #filename=log_filepath,
+        format='[%(asctime)s - %(levelname)s - %(filename)s: %(lineno)d (%(funcName)s)] %(message)s',
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO if training_args.local_rank in [-1, 0] else logging.WARN,
     )
@@ -164,17 +184,6 @@ def main():
         config=config,
         cache_dir=model_args.cache_dir,
     )
-    '''
-    model_to_save = AutoModel.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-        cache_dir=model_args.cache_dir,
-    )
-    model_to_save.save_pretrained(training_args.output_dir)
-    tokenizer.save_pretrained(training_args.output_dir)
-    import pdb; pdb.set_trace()
-    '''
 
     # Get datasets
     train_dataset = (
@@ -211,7 +220,7 @@ def main():
 
         out_label_list = [[] for _ in range(batch_size)]
         preds_list = [[] for _ in range(batch_size)]
-        
+
         for i in range(batch_size):
             for j in range(seq_len):
                 if label_ids[i, j] != nn.CrossEntropyLoss().ignore_index:
@@ -222,7 +231,7 @@ def main():
 
     def compute_metrics(p: EvalPrediction) -> Dict:
         preds_list, out_label_list = align_predictions(p.predictions, p.label_ids)
-        
+
         return {
             "precision": precision_score(out_label_list, preds_list),
             "recall": recall_score(out_label_list, preds_list),
@@ -240,10 +249,17 @@ def main():
 
     # Training
     if training_args.do_train:
+        training_start_time = time.time()
+
         trainer.train(
             model_path=model_args.model_name_or_path if os.path.isdir(model_args.model_name_or_path) else None
         )
+
+        training_end_time = time.time()
+        training_total_time = training_end_time - training_start_time
+
         trainer.save_model()
+
         # For convenience, we also re-save the tokenizer to the same directory,
         # so that you can share your model easily on huggingface.co/models =)
         if trainer.is_world_master():
@@ -255,7 +271,7 @@ def main():
         logger.info("*** Evaluate ***")
 
         result = trainer.evaluate()
-        
+
         output_eval_file = os.path.join(training_args.output_dir, "eval_results.txt")
         if trainer.is_world_master():
             with open(output_eval_file, "w") as writer:
@@ -265,8 +281,7 @@ def main():
                     writer.write("%s = %s\n" % (key, value))
 
             results.update(result)
-    
-    
+
     # Predict
     if training_args.do_predict:
         test_dataset = NerDataset(
@@ -281,18 +296,22 @@ def main():
 
         predictions, label_ids, metrics = trainer.predict(test_dataset)
         preds_list, _ = align_predictions(predictions, label_ids)
-        
+
         # Save predictions
         output_test_results_file = os.path.join(training_args.output_dir, "test_results.txt")
         if trainer.is_world_master():
             with open(output_test_results_file, "w") as writer:
                 logger.info("***** Test results *****")
+
                 for key, value in metrics.items():
                     logger.info("  %s = %s", key, value)
                     writer.write("%s = %s\n" % (key, value))
 
-        
+                training_time_formatted = time.strftime('%H:%M:%S', time.gmtime(training_total_time))
+                logger.info(f"Total training time: {training_time_formatted}")
+
         output_test_predictions_file = os.path.join(training_args.output_dir, "test_predictions.txt")
+
         if trainer.is_world_master():
             with open(output_test_predictions_file, "w") as writer:
                 with open(os.path.join(data_args.data_dir, "test.txt"), "r") as f:
@@ -300,21 +319,26 @@ def main():
                     for line in f:
                         if line.startswith("-DOCSTART-") or line == "" or line == "\n":
                             writer.write(line)
+
                             if not preds_list[example_id]:
                                 example_id += 1
                         elif preds_list[example_id]:
                             entity_label = preds_list[example_id].pop(0)
+
                             if entity_label == 'O':
                                 output_line = line.split()[0] + " " + entity_label + "\n"
                             else:
                                 output_line = line.split()[0] + " " + entity_label[0] + "\n"
+
                             # output_line = line.split()[0] + " " + preds_list[example_id].pop(0) + "\n"
                             writer.write(output_line)
                         else:
                             logger.warning(
                                 "Maximum sequence length exceeded: No prediction for '%s'.", line.split()[0]
                             )
-            
+
+    results = copy.deepcopy(x=metrics)
+    results['training_time'] = training_time_formatted
 
     return results
 
@@ -325,4 +349,5 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    main()
+    results = main()
+    print(results)

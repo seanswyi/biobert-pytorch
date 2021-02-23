@@ -1,5 +1,5 @@
 #!/bin/bash
-ENTITIES="euadr GAD"
+ENTITIES="euadr GAD DDI"
 MAX_LENGTH=128
 
 for ENTITY in $ENTITIES

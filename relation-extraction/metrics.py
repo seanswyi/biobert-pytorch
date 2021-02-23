@@ -29,14 +29,17 @@ def is_sklearn_available():
     return _has_sklearn
 
 if _has_sklearn:
-    """
     def simple_accuracy(preds, labels):
         return (preds == labels).mean()
-    """
 
-    def acc_and_f1(preds, labels):
+    def acc_and_f1(preds, labels, task='sst-2'):
         acc = simple_accuracy(preds, labels)
-        f1 = f1_score(y_true=labels, y_pred=preds)
+
+        if task in ['ddi', 'chemprot']:
+            f1 = f1_score(y_true=labels, y_pred=preds, average='macro')
+        else:
+            f1 = f1_score(y_true=labels, y_pred=preds)
+
         return {
             "acc": acc,
             "f1": f1,
@@ -56,8 +59,8 @@ if _has_sklearn:
 
     def glue_compute_metrics(task_name, preds, labels):
         assert len(preds) == len(labels)
-        if task_name == "sst-2":
-            return acc_and_f1(preds, labels)
-        else:
-            raise KeyError(task_name)
-
+        return acc_and_f1(preds, labels, task=task_name)
+        # if task_name == "sst-2":
+        #     return acc_and_f1(preds, labels)
+        # else:
+        #     raise KeyError(task_name)

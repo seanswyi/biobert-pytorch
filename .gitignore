@@ -1,0 +1,15 @@
+__pycache__/
+runs/
+results/
+wandb/
+datasets/NER/BC2GM/
+datasets/NER/BC4CHEMD/
+datasets/NER/JNLPBA/
+datasets/NER/NCBI-disease/
+datasets/NER/linnaeus/
+datasets/NER/s800/
+datasets/QA/
+datasets/RE/euadr/
+datasets/RE/GAD
+sentence-similarity/
+cached*

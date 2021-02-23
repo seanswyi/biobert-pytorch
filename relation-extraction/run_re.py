@@ -15,28 +15,32 @@
 # limitations under the License.
 """ Finetuning the library models for sequence classification on GLUE (Bert, XLM, XLNet, RoBERTa, Albert, XLM-RoBERTa)."""
 
-
+import copy
 import dataclasses
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
 import numpy as np
 
-from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction, GlueDataset
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction # GlueDataset
 from transformers import GlueDataTrainingArguments as DataTrainingArguments
 from transformers import (
     HfArgumentParser,
     Trainer,
     TrainingArguments,
     #glue_compute_metrics,
-    glue_output_modes,
-    glue_tasks_num_labels,
+    # glue_output_modes,
+    # glue_tasks_num_labels,
     set_seed,
 )
 from metrics import glue_compute_metrics
+
+from glue_dataset import GlueDataset, glue_tasks_num_labels, glue_output_modes
+
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,9 @@ class ModelArguments:
     """
     Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
     """
+    # model_type: str = field(
+    #     metadata={'help': "Type of model to use."}
+    # )
 
     model_name_or_path: str = field(
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
@@ -78,7 +85,6 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-
     if (
         os.path.exists(training_args.output_dir)
         and os.listdir(training_args.output_dir)
@@ -89,9 +95,21 @@ def main():
             f"Output directory ({training_args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
         )
 
+    # model_type = model_args.model_type
+    # log_dir = './results'
+
+    # if model_type == 'base':
+    #     model_args.model_name_or_path = 'bert-base-uncased'
+    # elif model_type == 'base-pubmed':
+    #     model_args.model_name_or_path = 'bionlp/bluebert_pubmed_uncased_L-12_H-768_A-12'
+    # elif model_type == 'base-pubmed-mimic':
+    #     model_args.model_name_or_path = 'bionlp/bluebert_pubmed_mimic_uncased_L-12_H-768_A-12'
+    # else:
+    #     raise NotImplementedError
+
     # Setup logging
     logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        format='[%(asctime)s - %(levelname)s - %(filename)s: %(lineno)d (%(funcName)s)] %(message)s',
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO if training_args.local_rank in [-1, 0] else logging.WARN,
     )
@@ -139,12 +157,12 @@ def main():
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
-    
+
     # Currently, this code do not support distributed training.
     training_args.warmup_steps = int(model_args.warmup_proportion * (len(train_dataset) / training_args.per_device_train_batch_size) * training_args.num_train_epochs)
     training_args_weight_decay = 0.01
     logger.info("Training/evaluation parameters %s", training_args)
-    
+
     config = AutoConfig.from_pretrained(
         model_args.config_name if model_args.config_name else model_args.model_name_or_path,
         num_labels=num_labels,
@@ -179,9 +197,15 @@ def main():
 
     # Training
     if training_args.do_train:
+        training_start_time = time.time()
+
         trainer.train(
             model_path=model_args.model_name_or_path if os.path.isdir(model_args.model_name_or_path) else None
         )
+
+        training_end_time = time.time()
+        training_total_time = training_end_time - training_start_time
+
         trainer.save_model()
         # For convenience, we also re-save the tokenizer to the same directory,
         # so that you can share your model easily on huggingface.co/models =)
@@ -228,17 +252,25 @@ def main():
 
         for test_dataset in test_datasets:
             predictions = trainer.predict(test_dataset=test_dataset).predictions
+            labels = np.array([test_dataset.__getitem__(idx).label for idx in range(len(test_dataset))])
+
+            assert len(predictions) == len(labels), f"len(predictions) = {len(predictions)} =/= len(labels) = {len(labels)}"
+
             if output_mode == "classification":
                 predictions = np.argmax(predictions, axis=1)
 
             output_test_file = os.path.join(
-                training_args.output_dir, 
+                training_args.output_dir,
                 f"test_results.txt"
                 #f"test_results_{test_dataset.args.task_name}.txt"
             )
+
+            test_results = glue_compute_metrics(task_name='ddi', preds=predictions, labels=labels)
+
             if trainer.is_world_master():
                 with open(output_test_file, "w") as writer:
                     logger.info("***** Test results {} *****".format(test_dataset.args.task_name))
+                    logger.info(f"Accuracy: {test_results['acc']}\tMacro F1: {test_results['f1']}")
                     writer.write("index\tprediction\n")
                     for index, item in enumerate(predictions):
                         if output_mode == "regression":
@@ -246,7 +278,14 @@ def main():
                         else:
                             item = test_dataset.get_labels()[item]
                             writer.write("%d\t%s\n" % (index, item))
-    return eval_results
+
+                training_time_formatted = time.strftime('%H:%M:%S', time.gmtime(training_total_time))
+                logger.info(f"Total training time: {training_time_formatted}")
+
+    final_results = copy.deepcopy(x=test_results)
+    final_results['training_time'] = training_time_formatted
+
+    return final_results
 
 
 def _mp_fn(index):
@@ -255,4 +294,5 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    main()
+    results = main()
+    print(results)
