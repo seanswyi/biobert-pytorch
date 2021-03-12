@@ -169,12 +169,20 @@ def main():
         finetuning_task=data_args.task_name,
         cache_dir=model_args.cache_dir,
     )
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-        cache_dir=model_args.cache_dir,
-    )
+    try:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=False,
+            config=config,
+            cache_dir=model_args.cache_dir,
+        )
+    except:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            os.path.join(model_args.model_name_or_path,"model.ckpt.index"),
+            from_tf=True,
+            config=config,
+            cache_dir=model_args.cache_dir,
+        )
 
     def build_compute_metrics_fn(task_name: str) -> Callable[[EvalPrediction], Dict]:
         def compute_metrics_fn(p: EvalPrediction):

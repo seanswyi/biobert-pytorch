@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from seqeval.metrics import f1_score, precision_score, recall_score
 from torch import nn
+import wandb
 
 from transformers import (
     AutoConfig,
@@ -117,6 +118,9 @@ def main():
 
     model_type = model_args.model_type
 
+    wandb.init(project='biobert-pytorch-seanyi', name=model_args.model_name_or_path.split("/")[-1])
+    wandb.config.update(model_args)
+
     if (
         os.path.exists(training_args.output_dir)
         and os.listdir(training_args.output_dir)
@@ -178,12 +182,21 @@ def main():
         cache_dir=model_args.cache_dir,
         use_fast=model_args.use_fast,
     )
-    model = AutoModelForTokenClassification.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-        cache_dir=model_args.cache_dir,
-    )
+    
+    try:
+        model = AutoModelForTokenClassification.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=False,
+            config=config,
+            cache_dir=model_args.cache_dir,
+        )
+    except:
+        model = AutoModelForTokenClassification.from_pretrained(
+            os.path.join(model_args.model_name_or_path,"model.ckpt.index"),
+            from_tf=True,
+            config=config,
+            cache_dir=model_args.cache_dir,
+        )
 
     # Get datasets
     train_dataset = (
@@ -339,6 +352,8 @@ def main():
 
     results = copy.deepcopy(x=metrics)
     results['training_time'] = training_time_formatted
+
+    wandb.log(results)
 
     return results
 
